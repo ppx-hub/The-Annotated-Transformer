@@ -23,6 +23,3 @@ https://github.com/lucidrains/vit-pytorch
 
 - [Masked Autoencoders(MAE)](https://zhuanlan.zhihu.com/p/444573241)
 
-- [Multi30K dataset link is broken](https://github.com/pytorch/text/issues/1756)
-
-- [ViT源码阅读-PyTorch](https://zhuanlan.zhihu.com/p/442125846)

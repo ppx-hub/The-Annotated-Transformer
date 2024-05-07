@@ -10,8 +10,8 @@ from torch import nn
 import torch.nn.functional as F
 from einops import repeat
 
-from vit_pytorch.vit import Transformer
-from vit_pytorch.vit import ViT
+from vit_pytorch import Transformer
+from vit_pytorch import ViT
 
 class MAE(nn.Module):
     def __init__(
@@ -36,7 +36,7 @@ class MAE(nn.Module):
         pixel_values_per_patch = self.patch_to_emb.weight.shape[-1]  # self.patch_to_emb.weight.shape (encoder_dim, patch_size * patch_size * 3)
 
         # decoder parameters
-
+        self.decoder_dim = decoder_dim
         self.enc_to_dec = nn.Linear(encoder_dim, decoder_dim) if encoder_dim != decoder_dim else nn.Identity()
         self.mask_token = nn.Parameter(torch.randn(decoder_dim))
         self.decoder = Transformer(dim = decoder_dim, depth = decoder_depth, heads = decoder_heads, dim_head = decoder_dim_head, mlp_dim = decoder_dim * 4)
@@ -48,14 +48,14 @@ class MAE(nn.Module):
 
         # get patches
 
-        patches = self.to_patch(img)  # patches.shape (8, 64, 32*32*3)
+        patches = self.to_patch(img)  # patches.shape (8, 196, 32*32*3)
 
         batch, num_patches, *_ = patches.shape
 
         # patch to encoder tokens and add positions
 
-        tokens = self.patch_to_emb(patches)  # tokens.shape (8, 64, 1024)
-        tokens = tokens + self.encoder.pos_embedding[:, 1:(num_patches + 1)]  # self.encoder.pos_embedding.shape (1, 65, 1024)
+        tokens = self.patch_to_emb(patches)  # tokens.shape (8, 196, 1024)
+        tokens = tokens + self.encoder.pos_embedding[:, 1:(num_patches + 1)]  # self.encoder.pos_embedding.shape (1, 196, 1024)
 
         # calculate of patches needed to be masked, and get random indices, dividing it up for mask vs unmasked
 
@@ -78,21 +78,28 @@ class MAE(nn.Module):
 
         # project encoder to decoder dimensions, if they are not equal - the paper says you can get away with a smaller dimension for decoder
 
-        decoder_tokens = self.enc_to_dec(encoded_tokens)  # decoder_tokens.shape (8, 16, 512)
+        decoder_tokens = self.enc_to_dec(encoded_tokens)  # decoder_tokens.shape (8, 49, 512)
+
+        # reapply decoder position embedding to unmasked tokens
+
+        unmasked_decoder_tokens = decoder_tokens + self.decoder_pos_emb(unmasked_indices)
 
         # repeat mask tokens for number of masked, and add the positions using the masked indices derived above
 
-        mask_tokens = repeat(self.mask_token, 'd -> b n d', b = batch, n = num_masked)  # mask_tokens.shape (512,) -> (8, 48, 512)
+        mask_tokens = repeat(self.mask_token, 'd -> b n d', b = batch, n = num_masked)  # mask_tokens.shape (512,) -> (8, 147, 512)
+        mask_tokens = mask_tokens + self.decoder_pos_emb(masked_indices)
 
         # concat the masked tokens to the decoder tokens and attend with decoder
 
-        decoder_tokens = torch.cat((mask_tokens, decoder_tokens), dim = 1)  # decoder_tokens.shape (8, 64, 512)
+        decoder_tokens = torch.zeros(batch, num_patches, self.decoder_dim, device=device)  # decoder_tokens.shape (8, 196, 512)
+        decoder_tokens[batch_range, unmasked_indices] = unmasked_decoder_tokens
+        decoder_tokens[batch_range, masked_indices] = mask_tokens
         decoded_tokens = self.decoder(decoder_tokens)
 
         # splice out the mask tokens and project to pixel values
 
-        mask_tokens = decoded_tokens[:, :num_masked]
-        pred_pixel_values = self.to_pixels(mask_tokens)  # self.to_pixels: nn.Linear(512, 3072)
+        mask_tokens = decoded_tokens[batch_range, masked_indices]  # # decoder_tokens.shape (8, 157, 512)
+        pred_pixel_values = self.to_pixels(mask_tokens)  # self.to_pixels: nn.Linear(512, 768)
 
         # calculate reconstruction loss
 
@@ -102,8 +109,8 @@ class MAE(nn.Module):
 
 if __name__ == "__main__":
     v = ViT(
-        image_size = 256,
-        patch_size = 32,
+        image_size = 224,
+        patch_size = 16,
         num_classes = 1000,
         dim = 1024,
         depth = 6,
@@ -118,6 +125,6 @@ if __name__ == "__main__":
         decoder_depth = 6       # anywhere from 1 to 8
     )
 
-    images = torch.randn(8, 3, 256, 256)
+    images = torch.randn(8, 3, 224, 224)
 
     loss = mae(images)
